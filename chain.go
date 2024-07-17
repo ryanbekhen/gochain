@@ -75,7 +75,7 @@ func (a *Chain) Invoke(ctx context.Context, message string) error {
 		{Role: "user", Content: message},
 	}, opts)
 	if err != nil {
-		return ErrChatFailed
+		return err
 	}
 
 	fr, err := a.parseResponse(response)

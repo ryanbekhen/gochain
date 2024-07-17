@@ -12,5 +12,4 @@ You must always select one of the above tools and respond with only a JSON objec
 	"tool_input": <parameters for the selected tool, matching the tool's JSON schema>
 }
 
-You must always using user's language only.
 `
