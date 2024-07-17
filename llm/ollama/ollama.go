@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/ryanbekhen/gochain"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -17,55 +18,6 @@ type Ollama struct {
 	base  *url.URL
 	model string
 	http  *http.Client
-}
-
-type ChatRequest struct {
-	Model     string                 `json:"model"`
-	Messages  []gochain.Message      `json:"messages"`
-	Stream    *bool                  `json:"stream,omitempty"`
-	Format    string                 `json:"format"`
-	KeepAlive time.Duration          `json:"keep_alive,omitempty"`
-	Options   map[string]interface{} `json:"options"`
-}
-
-type ChatResponse struct {
-	Model      string          `json:"model"`
-	CreatedAt  time.Time       `json:"created_at"`
-	Message    gochain.Message `json:"message"`
-	DoneReason string          `json:"done_reason,omitempty"`
-
-	Done bool `json:"done"`
-
-	Metrics
-}
-
-type StatusError struct {
-	StatusCode   int
-	Status       string
-	ErrorMessage string `json:"error"`
-}
-
-type Metrics struct {
-	TotalDuration      time.Duration `json:"total_duration,omitempty"`
-	LoadDuration       time.Duration `json:"load_duration,omitempty"`
-	PromptEvalCount    int           `json:"prompt_eval_count,omitempty"`
-	PromptEvalDuration time.Duration `json:"prompt_eval_duration,omitempty"`
-	EvalCount          int           `json:"eval_count,omitempty"`
-	EvalDuration       time.Duration `json:"eval_duration,omitempty"`
-}
-
-func (e StatusError) Error() string {
-	switch {
-	case e.Status != "" && e.ErrorMessage != "":
-		return fmt.Sprintf("%s: %s", e.Status, e.ErrorMessage)
-	case e.Status != "":
-		return e.Status
-	case e.ErrorMessage != "":
-		return e.ErrorMessage
-	default:
-		// this should not happen
-		return "something went wrong, please see the ollama server logs for details"
-	}
 }
 
 func NewFromEnvironment() (*Ollama, error) {
@@ -107,6 +59,85 @@ func (o *Ollama) Model() string {
 	return o.model
 }
 
+func checkError(resp *http.Response, body []byte) error {
+	if resp.StatusCode < http.StatusBadRequest {
+		return nil
+	}
+
+	apiError := StatusError{StatusCode: resp.StatusCode}
+
+	err := json.Unmarshal(body, &apiError)
+	if err != nil {
+		// Use the full body as the message if we fail to decode a response.
+		apiError.ErrorMessage = string(body)
+	}
+
+	return apiError
+}
+
+func (o *Ollama) do(ctx context.Context, method, path string, reqData, respData any) error {
+	var reqBody io.Reader
+	var data []byte
+	var err error
+
+	switch reqData := reqData.(type) {
+	case io.Reader:
+		// reqData is already an io.Reader
+		reqBody = reqData
+	case nil:
+		// noop
+	default:
+		data, err = json.Marshal(reqData)
+		if err != nil {
+			return err
+		}
+
+		reqBody = bytes.NewReader(data)
+	}
+
+	requestURL := o.base.JoinPath(path)
+	request, err := http.NewRequestWithContext(ctx, method, requestURL.String(), reqBody)
+	if err != nil {
+		return err
+	}
+
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("User-Agent", fmt.Sprintf("gochain"))
+
+	respObj, err := o.http.Do(request)
+	if err != nil {
+		return err
+	}
+	defer respObj.Body.Close()
+
+	respBody, err := io.ReadAll(respObj.Body)
+	if err != nil {
+		return err
+	}
+
+	if err := checkError(respObj, respBody); err != nil {
+		return err
+	}
+
+	if len(respBody) > 0 && respData != nil {
+		if err := json.Unmarshal(respBody, respData); err != nil {
+			return err
+		}
+	}
+	return nil
+
+}
+
+func (o *Ollama) Embedding(ctx context.Context, req *EmbeddingRequest) (*EmbeddingResponse, error) {
+	var resp EmbeddingResponse
+	if err := o.do(ctx, http.MethodPost, "/api/embeddings", req, &resp); err != nil {
+		return nil, err
+	}
+
+	return &resp, nil
+}
+
 func (o *Ollama) Chat(ctx context.Context, messages []gochain.Message, options ...map[string]interface{}) (string, error) {
 	var opts map[string]interface{}
 	if len(options) > 0 {
@@ -136,7 +167,7 @@ func (o *Ollama) Chat(ctx context.Context, messages []gochain.Message, options .
 	}
 
 	var chatResponse string
-	if err := o.chat(ctx, req, func(resp ChatResponse) error {
+	if err := o.SendChat(ctx, req, func(resp ChatResponse) error {
 		chatResponse += resp.Message.Content
 		return nil
 	}); err != nil {
@@ -168,7 +199,7 @@ func (o *Ollama) stream(ctx context.Context, method, path string, data any, fn f
 
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/x-ndjson")
-	request.Header.Set("User-Agent", "ollama")
+	request.Header.Set("User-Agent", "gochain")
 
 	response, err := o.http.Do(request)
 	if err != nil {
@@ -209,7 +240,7 @@ func (o *Ollama) stream(ctx context.Context, method, path string, data any, fn f
 	return nil
 }
 
-func (o *Ollama) chat(ctx context.Context, req *ChatRequest, fn func(ChatResponse) error) error {
+func (o *Ollama) SendChat(ctx context.Context, req *ChatRequest, fn func(ChatResponse) error) error {
 	return o.stream(ctx, http.MethodPost, "/api/chat", req, func(bts []byte) error {
 		var resp ChatResponse
 		if err := json.Unmarshal(bts, &resp); err != nil {
