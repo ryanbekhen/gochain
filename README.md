@@ -9,6 +9,7 @@ GoChain is a library for LLM (Large Language Model) for Go. It is designed to be
 ## LLM Support
 
 - [x] Ollama
+- [x] Cloudflare Workers AI
 - [ ] GPT
 
 ## Installation
