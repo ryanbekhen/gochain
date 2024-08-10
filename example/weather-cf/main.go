@@ -118,7 +118,7 @@ func main() {
 		prompt := "Using this data: " + weather + ". Respond to this prompt: " + message
 
 		_, err = engine2.Embedding(context.Background(), &cfworkerai.EmbeddingRequest{
-			Model:  "@cf/baai/bge-base-en-v1.5 model",
+			Model:  "@cf/baai/bge-large-en-v1.5",
 			Prompt: prompt,
 		})
 		if err != nil {
