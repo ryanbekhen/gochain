@@ -10,3 +10,13 @@ type ChatResponse struct {
 type ChatResponseResult struct {
 	Response string `json:"response"`
 }
+
+type EmbeddingRequest struct {
+	Model  string `json:"model"`
+	Prompt string `json:"prompt"`
+}
+
+type EmbeddingResponse struct {
+	Result  any  `json:"result"`
+	Success bool `json:"success"`
+}

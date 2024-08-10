@@ -9,7 +9,7 @@ type Function struct {
 
 type FunctionResponse struct {
 	Tool      string                 `json:"tool"`
-	ToolInput map[string]interface{} `json:"tool_input"`
+	ToolInput map[string]interface{} `json:"toolInput"`
 }
 
 type ConversationalFunctionResponse struct {

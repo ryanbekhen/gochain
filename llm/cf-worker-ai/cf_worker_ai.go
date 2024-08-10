@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"github.com/ryanbekhen/gochain"
 	"net/http"
 	"net/url"
@@ -14,9 +13,10 @@ import (
 )
 
 type CFWorkerAI struct {
-	base  *url.URL
-	model string
-	http  *http.Client
+	base      *url.URL
+	model     string
+	accountId string
+	http      *http.Client
 }
 
 type tokenTransport struct {
@@ -29,6 +29,28 @@ func (t *tokenTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return t.Transport.RoundTrip(req)
 }
 
+func New(accountID, token, model string, httpClient *http.Client) (*CFWorkerAI, error) {
+	if model == "" {
+		model = "@cf/meta/llama-3.1-8b-instruct"
+	}
+
+	if accountID == "" || token == "" {
+		return nil, errors.New("CF_WORKER_ACCOUNT_ID or CF_WORKER_AI_TOKEN environment variables are not set")
+	}
+
+	base, err := url.Parse("https://api.cloudflare.com/client/v4/accounts")
+	if err != nil {
+		return nil, err
+	}
+
+	return &CFWorkerAI{
+		base:      base,
+		model:     model,
+		accountId: accountID,
+		http:      httpClient,
+	}, nil
+}
+
 func NewFromEnvironment() (*CFWorkerAI, error) {
 	baseURL := "https://api.cloudflare.com/client/v4/accounts"
 	accountID := os.Getenv("CF_WORKER_AI_ACCOUNT_ID")
@@ -36,14 +58,12 @@ func NewFromEnvironment() (*CFWorkerAI, error) {
 	model := os.Getenv("CF_WORKER_AI_MODEL")
 
 	if model == "" {
-		model = "@cf/meta/llama-3-8b-instruct"
+		model = "@cf/meta/llama-3.1-8b-instruct"
 	}
 
 	if accountID == "" || token == "" {
 		return nil, errors.New("CF_WORKER_ACCOUNT_ID or CF_WORKER_AI_TOKEN environment variables are not set")
 	}
-
-	baseURL += "/" + accountID + "/ai/run/" + model
 
 	base, err := url.Parse(baseURL)
 	if err != nil {
@@ -58,9 +78,10 @@ func NewFromEnvironment() (*CFWorkerAI, error) {
 	}
 
 	return &CFWorkerAI{
-		base:  base,
-		http:  client,
-		model: model,
+		base:      base,
+		http:      client,
+		accountId: accountID,
+		model:     model,
 	}, nil
 }
 
@@ -72,11 +93,37 @@ func (c *CFWorkerAI) Model() string {
 	return c.model
 }
 
+func (c *CFWorkerAI) SetModel(model string) {
+	c.model = model
+}
+
+func (c *CFWorkerAI) Embedding(ctx context.Context, req *EmbeddingRequest) (*EmbeddingResponse, error) {
+	reqJSON, _ := json.Marshal(map[string]interface{}{
+		"text": req.Prompt,
+	})
+
+	baseURL := c.base.String() + "/" + c.accountId + "/ai/run/" + req.Model
+	resp, err := c.http.Post(baseURL, "application/json", bytes.NewBuffer(reqJSON))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var response EmbeddingResponse
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, err
+	}
+
+	return &response, nil
+}
+
 func (c *CFWorkerAI) Chat(ctx context.Context, messages []gochain.Message, options ...map[string]interface{}) (string, error) {
 	reqJSON, _ := json.Marshal(map[string]interface{}{
 		"messages": messages,
 	})
-	resp, err := c.http.Post(c.base.String(), "application/json", bytes.NewBuffer(reqJSON))
+
+	baseURL := c.base.String() + "/" + c.accountId + "/ai/run/" + c.model
+	resp, err := c.http.Post(baseURL, "application/json", bytes.NewBuffer(reqJSON))
 	if err != nil {
 		return "", err
 	}
@@ -86,14 +133,14 @@ func (c *CFWorkerAI) Chat(ctx context.Context, messages []gochain.Message, optio
 		return "", errors.New("error with status code: " + resp.Status)
 	}
 
-	var body *ChatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	var response ChatResponse
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
 		return "", err
 	}
 
-	if !body.Success {
-		fmt.Println(resp.Body)
-		return "", errors.New("chat failed: " + strings.Join(body.Error, ", "))
+	if !response.Success {
+		return "", errors.New("chat failed: " + strings.Join(response.Error, ", "))
 	}
-	return body.Result.Response, nil
+
+	return response.Result.Response, nil
 }

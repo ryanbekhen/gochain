@@ -20,14 +20,14 @@ func New(llm LLM) *Chain {
 		llm: llm,
 		fn: []*Function{
 			{
-				Name:        "__conversational_response",
+				Name:        "conversationalResponse",
 				Description: "Respond conversationally if no other tools should be called for a given query.",
 				Parameters: map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
 						"response": map[string]interface{}{
 							"type":        "string",
-							"description": "Conversational response to the user.",
+							"description": "Conversational response to the user with using same language.",
 						},
 					},
 					"required": []string{"response"},
@@ -41,7 +41,7 @@ func (a *Chain) RegisterFunction(name string, description string, parameters int
 	sort.Slice(a.fn, func(i, j int) bool {
 		n1 := a.fn[i].Name
 		n2 := a.fn[j].Name
-		return n1 != "__conversational_response" && (n2 == "__conversational_response" || n1 < n2)
+		return n1 != "conversationalResponse" && (n2 == "conversationalResponse" || n1 < n2)
 	})
 
 	a.fn = append(a.fn, &Function{
@@ -62,7 +62,7 @@ func (a *Chain) Invoke(ctx context.Context, message string) error {
 		return err
 	}
 
-	promptContent := strings.Replace(prompt.FunctionsToCall, "{functions_to_call}", string(functions), -1)
+	promptContent := strings.Replace(prompt.FunctionsToCall, "{functionsToCall}", string(functions), -1)
 
 	opts := map[string]interface{}{}
 
@@ -83,7 +83,7 @@ func (a *Chain) Invoke(ctx context.Context, message string) error {
 		return ErrInvalidResponse
 	}
 
-	if fr.Tool == "__conversational_response" {
+	if fr.Tool == "conversationalResponse" {
 		resp, ok := fr.ToolInput["response"].(string)
 		if !ok {
 			return ErrInvalidResponse
@@ -118,8 +118,7 @@ func (a *Chain) getHandler(tool string) (FunctionHandler, error) {
 
 func (a *Chain) parseResponse(response string) (*FunctionResponse, error) {
 	var fr FunctionResponse
-	err := json.Unmarshal([]byte(response), &fr)
-	if err != nil {
+	if err := json.Unmarshal([]byte(response), &fr); err != nil {
 		return nil, err
 	}
 
